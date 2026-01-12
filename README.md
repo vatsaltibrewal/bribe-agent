@@ -1,8 +1,8 @@
-# MeowFi Yield Aggregator Agent (Berachain Bepolia)
+# MeowFi Yield Aggregator Agent (Mantle Sepolia)
 
 ## Overview
 
-This script implements an automated agent for managing a DeFi yield aggregator protocol deployed on the Berachain Bepolia testnet. The agent monitors market conditions (simulated APYs and received bribes), calculates optimal yield strategies, and automatically rebalances funds between different underlying DeFi protocols to maximize returns. It also provides a Telegram bot interface for users to check status and for administrators to manage the protocol.
+This script implements an automated agent for managing a DeFi yield aggregator protocol deployed on the Mantle Sepolia testnet. The agent monitors market conditions (simulated APYs and received bribes), calculates optimal yield strategies, and automatically rebalances funds between different underlying DeFi protocols to maximize returns. It also provides a Telegram bot interface for users to check status and for administrators to manage the protocol.
 
 ## Features
 
@@ -12,13 +12,13 @@ This script implements an automated agent for managing a DeFi yield aggregator p
     *   `/status`: Displays current vault allocations and total balances.
     *   `/deposithelp`, `/withdrawhelp`, `/bribehelp`: Provides instructions for interacting with the contracts.
     *   Admin commands (`/manage_yield_token`, `/manage_protocol`, `/manage_bribe_token`) for protocol configuration.
-*   **On-Chain Interaction:** Uses `viem` to interact with the Berachain Bepolia network, read contract states, and send transactions.
-*   **Persistent Bribe Storage:** Uses an SQLite database ([`bribes_viem_bera.db`](bribes_viem_bera.db)) to store active bribe details and cache token decimals.
+*   **On-Chain Interaction:** Uses `viem` to interact with the Mantle Sepolia network, read contract states, and send transactions.
+*   **Persistent Bribe Storage:** Uses an SQLite database to store active bribe details and cache token decimals.
 *   **Configuration via Environment:** Sensitive keys, contract addresses, and RPC URLs are managed through a [`.env`](.env) file.
 
 ## Architecture
 
-1.  **Configuration & Setup:** Loads environment variables, defines the target blockchain ([`TARGET_CHAIN`](src/agent.ts) - Berachain Bepolia), and sets up `viem` public and wallet clients ([`publicClient`](src/agent.ts), [`walletClient`](src/agent.ts)).
+1.  **Configuration & Setup:** Loads environment variables, defines the target blockchain ([`TARGET_CHAIN`](src/agent.ts) - Mantle Sepolia), and sets up `viem` public and wallet clients ([`publicClient`](src/agent.ts), [`walletClient`](src/agent.ts)).
 2.  **Database:** Initializes an SQLite database connection ([`db`](src/agent.ts)) and creates tables for `bribes` and `token_decimals` if they don't exist.
 3.  **Telegram Bot:** Initializes a `telegraf` bot instance ([`bot`](src/agent.ts)) and defines handlers for user and admin commands.
 4.  **Bribe Listener:** Uses [`publicClient.watchContractEvent`](src/agent.ts) to listen for `BribeReceived` events on the [`BRIBE_COLLECTOR_CONTRACT_ADDRESS`](src/agent.ts). When an event is detected ([`startBribeListener`](src/agent.ts)):

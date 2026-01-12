@@ -19,7 +19,7 @@ import {
     ContractFunctionExecutionError 
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { monadTestnet, berachainBepolia } from 'viem/chains';
+import { mantleSepoliaTestnet } from 'viem/chains';
 import sqlite3 from 'sqlite3';
 import dotenv from 'dotenv';
 
@@ -27,7 +27,7 @@ dotenv.config();
 
 // --- Configuration & Constants ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const EVM_RPC_URL = process.env.EVM_RPC_URL || 'https://bepolia.rpc.berachain.com/';
+const EVM_RPC_URL = process.env.EVM_RPC_URL || 'https://rpc.sepolia.mantle.xyz';
 var AGENT_PRIVATE_KEY = process.env.AGENT_PRIVATE_KEY as Hex | undefined;
 const YIELD_AGGREGATOR_CONTRACT_ADDRESS = process.env.YIELD_AGGREGATOR_CONTRACT_ADDRESS as Address | undefined;
 const BRIBE_COLLECTOR_CONTRACT_ADDRESS = process.env.BRIBE_COLLECTOR_CONTRACT_ADDRESS as Address | undefined;
@@ -35,1159 +35,390 @@ const ADMIN_TELEGRAM_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map
 const REBALANCE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const BRIBE_APY_SCALE_FACTOR = 0.01; // Scale factor for APY boost calculation
 
-// Define Berachain Testnet
-const berachainArtio = defineChain({
-    id: 80069,
-    name: 'Berachain Bepolia',
-    nativeCurrency: { name: 'BERA', symbol: 'BERA', decimals: 18 },
-    rpcUrls: {
-        default: { http: [EVM_RPC_URL] }, // Use from .env or default
-        public: { http: ['https://bepolia.rpc.berachain.com/'] },
-    },
-    blockExplorers: {
-        default: { name: 'Beratrail', url: 'https://bepolia.beratrail.io/' },
-    },
-    testnet: true,
-});
+const TARGET_CHAIN = mantleSepoliaTestnet;
 
-const TARGET_CHAIN = berachainBepolia;
+// --- Token Registry (Mantle Sepolia) ---
+// Note: On testnets, token addresses change often depending on the faucet used.
+// These are common addresses, but you should verify them against your specific testnet deployment.
+const tokenRegistry: Record<string, Address> = {
+    "MNT": getAddress("0xDeadDeAddeAddEAddeadDEaDDEAdDeaDDeAD0000"), // Native MNT usually represented by a placeholder or wrapped logic
+    "WMNT": getAddress("0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8"), // Standard WETH/WMNT on Mantle Sepolia
+    "USDC": getAddress("0xDe33F39C168393e1858525b642647E3272444650"), // Example Testnet USDC
+    "USDT": getAddress("0x5F8D4232367759bCe5d9488D3ade77C199896500")  // Example Testnet USDT
+};
 
+// --- ABI Definitions (unchanged) ---
 const yieldAggregatorABI = [
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "initialOwner",
-				"type": "address"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "constructor"
+		"inputs": [{"internalType": "address","name": "initialOwner","type": "address"}],
+		"stateMutability": "nonpayable","type": "constructor"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "owner",
-				"type": "address"
-			}
-		],
-		"name": "OwnableInvalidOwner",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "owner","type": "address"}],
+		"name": "OwnableInvalidOwner","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "account",
-				"type": "address"
-			}
-		],
-		"name": "OwnableUnauthorizedAccount",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "account","type": "address"}],
+		"name": "OwnableUnauthorizedAccount","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			}
-		],
-		"name": "SafeERC20FailedOperation",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "token","type": "address"}],
+		"name": "SafeERC20FailedOperation","type": "error"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "user",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "user","type": "address"},
+			{"indexed": true,"internalType": "address","name": "token","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "amount","type": "uint256"}
 		],
-		"name": "Deposited",
-		"type": "event"
+		"name": "Deposited","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "agent",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "string",
-				"name": "protocolId",
-				"type": "string"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "rewardToken",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "agent","type": "address"},
+			{"indexed": true,"internalType": "string","name": "protocolId","type": "string"},
+			{"indexed": true,"internalType": "address","name": "rewardToken","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "amount","type": "uint256"}
 		],
-		"name": "Harvested",
-		"type": "event"
+		"name": "Harvested","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "previousOwner",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "newOwner",
-				"type": "address"
-			}
+			{"indexed": true,"internalType": "address","name": "previousOwner","type": "address"},
+			{"indexed": true,"internalType": "address","name": "newOwner","type": "address"}
 		],
-		"name": "OwnershipTransferred",
-		"type": "event"
+		"name": "OwnershipTransferred","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "string",
-				"name": "protocolId",
-				"type": "string"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "protocolAddress",
-				"type": "address"
-			}
+			{"indexed": true,"internalType": "string","name": "protocolId","type": "string"},
+			{"indexed": true,"internalType": "address","name": "protocolAddress","type": "address"}
 		],
-		"name": "ProtocolAdded",
-		"type": "event"
+		"name": "ProtocolAdded","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "agent",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "string",
-				"name": "fromProtocolId",
-				"type": "string"
-			},
-			{
-				"indexed": false,
-				"internalType": "string",
-				"name": "toProtocolId",
-				"type": "string"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "agent","type": "address"},
+			{"indexed": false,"internalType": "string","name": "fromProtocolId","type": "string"},
+			{"indexed": false,"internalType": "string","name": "toProtocolId","type": "string"},
+			{"indexed": true,"internalType": "address","name": "token","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "amount","type": "uint256"}
 		],
-		"name": "Rebalanced",
-		"type": "event"
+		"name": "Rebalanced","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "bool",
-				"name": "isAccepted",
-				"type": "bool"
-			}
+			{"indexed": true,"internalType": "address","name": "token","type": "address"},
+			{"indexed": false,"internalType": "bool","name": "isAccepted","type": "bool"}
 		],
-		"name": "TokenAccepted",
-		"type": "event"
+		"name": "TokenAccepted","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "user",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "user","type": "address"},
+			{"indexed": true,"internalType": "address","name": "token","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "amount","type": "uint256"}
 		],
-		"name": "Withdrawn",
-		"type": "event"
+		"name": "Withdrawn","type": "event"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "","type": "address"}],
 		"name": "acceptedTokens",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "bool","name": "","type": "bool"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_amount",
-				"type": "uint256"
-			}
-		],
-		"name": "deposit",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "address","name": "_token","type": "address"},{"internalType": "uint256","name": "_amount","type": "uint256"}],
+		"name": "deposit","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "_protocolId",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "string","name": "_protocolId","type": "string"},{"internalType": "address","name": "_token","type": "address"}],
 		"name": "getAllocatedBalance",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_user",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "_user","type": "address"},{"internalType": "address","name": "_token","type": "address"}],
 		"name": "getUserBalance",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "_protocolId",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "_rewardToken",
-				"type": "address"
-			}
-		],
-		"name": "harvest",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "string","name": "_protocolId","type": "string"},{"internalType": "address","name": "_rewardToken","type": "address"}],
+		"name": "harvest","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			},
-			{
-				"internalType": "bool",
-				"name": "_isAccepted",
-				"type": "bool"
-			}
-		],
-		"name": "manageAcceptedToken",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "address","name": "_token","type": "address"},{"internalType": "bool","name": "_isAccepted","type": "bool"}],
+		"name": "manageAcceptedToken","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "_protocolId",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "_protocolAddress",
-				"type": "address"
-			}
-		],
-		"name": "manageProtocol",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "string","name": "_protocolId","type": "string"},{"internalType": "address","name": "_protocolAddress","type": "address"}],
+		"name": "manageProtocol","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "owner",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "address","name": "","type": "address"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "string","name": "","type": "string"},{"internalType": "address","name": "","type": "address"}],
 		"name": "protocolAllocations",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "_fromProtocolId",
-				"type": "string"
-			},
-			{
-				"internalType": "string",
-				"name": "_toProtocolId",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_amount",
-				"type": "uint256"
-			}
-		],
-		"name": "rebalance",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "string","name": "_fromProtocolId","type": "string"},{"internalType": "string","name": "_toProtocolId","type": "string"},{"internalType": "address","name": "_token","type": "address"},{"internalType": "uint256","name": "_amount","type": "uint256"}],
+		"name": "rebalance","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
 		"inputs": [],
-		"name": "renounceOwnership",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"name": "renounceOwnership","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "","type": "address"}],
 		"name": "totalTokenBalances",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "newOwner",
-				"type": "address"
-			}
-		],
-		"name": "transferOwnership",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "address","name": "newOwner","type": "address"}],
+		"name": "transferOwnership","outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "string",
-				"name": "",
-				"type": "string"
-			}
-		],
+		"inputs": [{"internalType": "string","name": "","type": "string"}],
 		"name": "underlyingProtocols",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "address","name": "","type": "address"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "","type": "address"},{"internalType": "address","name": "","type": "address"}],
 		"name": "userBalances",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_amount",
-				"type": "uint256"
-			}
-		],
-		"name": "withdraw",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"inputs": [{"internalType": "address","name": "_token","type": "address"},{"internalType": "uint256","name": "_amount","type": "uint256"}],
+		"name": "withdraw","outputs": [],"stateMutability": "nonpayable","type": "function"
 	}
 ] as const satisfies Abi;
 
 const bribeCollectorABI = [
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "initialOwner",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "initialBribeRecipient",
-				"type": "address"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "constructor"
+		"inputs": [{"internalType": "address","name": "initialOwner","type": "address"},{"internalType": "address","name": "initialBribeRecipient","type": "address"}],
+		"stateMutability": "nonpayable","type": "constructor"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "owner",
-				"type": "address"
-			}
-		],
-		"name": "OwnableInvalidOwner",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "owner","type": "address"}],
+		"name": "OwnableInvalidOwner","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "account",
-				"type": "address"
-			}
-		],
-		"name": "OwnableUnauthorizedAccount",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "account","type": "address"}],
+		"name": "OwnableUnauthorizedAccount","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			}
-		],
-		"name": "SafeERC20FailedOperation",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "token","type": "address"}],
+		"name": "SafeERC20FailedOperation","type": "error"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "string",
-				"name": "projectId",
-				"type": "string"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "bribeToken",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "bribeAmount",
-				"type": "uint256"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "durationSeconds",
-				"type": "uint256"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "payer",
-				"type": "address"
-			}
+			{"indexed": true,"internalType": "string","name": "projectId","type": "string"},
+			{"indexed": true,"internalType": "address","name": "bribeToken","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "bribeAmount","type": "uint256"},
+			{"indexed": false,"internalType": "uint256","name": "durationSeconds","type": "uint256"},
+			{"indexed": true,"internalType": "address","name": "payer","type": "address"}
 		],
-		"name": "BribeReceived",
-		"type": "event"
+		"name": "BribeReceived","type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [{"indexed": true,"internalType": "address","name": "newRecipient","type": "address"}],
+		"name": "BribeRecipientChanged","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "newRecipient",
-				"type": "address"
-			}
+			{"indexed": true,"internalType": "address","name": "token","type": "address"},
+			{"indexed": false,"internalType": "bool","name": "isAccepted","type": "bool"}
 		],
-		"name": "BribeRecipientChanged",
-		"type": "event"
+		"name": "BribeTokenManaged","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "bool",
-				"name": "isAccepted",
-				"type": "bool"
-			}
+			{"indexed": true,"internalType": "address","name": "token","type": "address"},
+			{"indexed": true,"internalType": "address","name": "recipient","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "amount","type": "uint256"}
 		],
-		"name": "BribeTokenManaged",
-		"type": "event"
+		"name": "BribesWithdrawn","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "recipient",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "previousOwner","type": "address"},
+			{"indexed": true,"internalType": "address","name": "newOwner","type": "address"}
 		],
-		"name": "BribesWithdrawn",
-		"type": "event"
+		"name": "OwnershipTransferred","type": "event"
 	},
 	{
-		"anonymous": false,
-		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "previousOwner",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "newOwner",
-				"type": "address"
-			}
-		],
-		"name": "OwnershipTransferred",
-		"type": "event"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "","type": "address"}],
 		"name": "acceptedBribeTokens",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "bool","name": "","type": "bool"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "bribeRecipient",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "address","name": "","type": "address"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			},
-			{
-				"internalType": "bool",
-				"name": "_isAccepted",
-				"type": "bool"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "_token","type": "address"},{"internalType": "bool","name": "_isAccepted","type": "bool"}],
 		"name": "manageBribeToken",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "owner",
-		"outputs": [
-			{
-				"internalType": "address",
-				"name": "",
-				"type": "address"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "address","name": "","type": "address"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "renounceOwnership",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_newRecipient",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "_newRecipient","type": "address"}],
 		"name": "setBribeRecipient",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
 		"inputs": [
-			{
-				"internalType": "string",
-				"name": "_projectId",
-				"type": "string"
-			},
-			{
-				"internalType": "address",
-				"name": "_bribeToken",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_bribeAmount",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "_durationSeconds",
-				"type": "uint256"
-			}
+			{"internalType": "string","name": "_projectId","type": "string"},
+			{"internalType": "address","name": "_bribeToken","type": "address"},
+			{"internalType": "uint256","name": "_bribeAmount","type": "uint256"},
+			{"internalType": "uint256","name": "_durationSeconds","type": "uint256"}
 		],
 		"name": "submitBribe",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "newOwner",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "newOwner","type": "address"}],
 		"name": "transferOwnership",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [],"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "_token",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "_token","type": "address"}],
 		"name": "withdrawBribes",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [],"stateMutability": "nonpayable","type": "function"
 	}
 ] as const satisfies Abi;
 
 const erc20Abi = [
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "spender",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "allowance",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "needed",
-				"type": "uint256"
-			}
-		],
-		"name": "ERC20InsufficientAllowance",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "spender","type": "address"},{"internalType": "uint256","name": "allowance","type": "uint256"},{"internalType": "uint256","name": "needed","type": "uint256"}],
+		"name": "ERC20InsufficientAllowance","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "sender",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "balance",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "needed",
-				"type": "uint256"
-			}
-		],
-		"name": "ERC20InsufficientBalance",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "sender","type": "address"},{"internalType": "uint256","name": "balance","type": "uint256"},{"internalType": "uint256","name": "needed","type": "uint256"}],
+		"name": "ERC20InsufficientBalance","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "approver",
-				"type": "address"
-			}
-		],
-		"name": "ERC20InvalidApprover",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "approver","type": "address"}],
+		"name": "ERC20InvalidApprover","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "receiver",
-				"type": "address"
-			}
-		],
-		"name": "ERC20InvalidReceiver",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "receiver","type": "address"}],
+		"name": "ERC20InvalidReceiver","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "sender",
-				"type": "address"
-			}
-		],
-		"name": "ERC20InvalidSender",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "sender","type": "address"}],
+		"name": "ERC20InvalidSender","type": "error"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "spender",
-				"type": "address"
-			}
-		],
-		"name": "ERC20InvalidSpender",
-		"type": "error"
+		"inputs": [{"internalType": "address","name": "spender","type": "address"}],
+		"name": "ERC20InvalidSpender","type": "error"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "owner",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "spender",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "value",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "owner","type": "address"},
+			{"indexed": true,"internalType": "address","name": "spender","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "value","type": "uint256"}
 		],
-		"name": "Approval",
-		"type": "event"
+		"name": "Approval","type": "event"
 	},
 	{
 		"anonymous": false,
 		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "from",
-				"type": "address"
-			},
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "to",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "uint256",
-				"name": "value",
-				"type": "uint256"
-			}
+			{"indexed": true,"internalType": "address","name": "from","type": "address"},
+			{"indexed": true,"internalType": "address","name": "to","type": "address"},
+			{"indexed": false,"internalType": "uint256","name": "value","type": "uint256"}
 		],
-		"name": "Transfer",
-		"type": "event"
+		"name": "Transfer","type": "event"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "owner",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "spender",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "owner","type": "address"},{"internalType": "address","name": "spender","type": "address"}],
 		"name": "allowance",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "spender",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "value",
-				"type": "uint256"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "spender","type": "address"},{"internalType": "uint256","name": "value","type": "uint256"}],
 		"name": "approve",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [{"internalType": "bool","name": "","type": "bool"}],
+		"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "account",
-				"type": "address"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "account","type": "address"}],
 		"name": "balanceOf",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "decimals",
-		"outputs": [
-			{
-				"internalType": "uint8",
-				"name": "",
-				"type": "uint8"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint8","name": "","type": "uint8"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "name",
-		"outputs": [
-			{
-				"internalType": "string",
-				"name": "",
-				"type": "string"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "string","name": "","type": "string"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "symbol",
-		"outputs": [
-			{
-				"internalType": "string",
-				"name": "",
-				"type": "string"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "string","name": "","type": "string"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
 		"inputs": [],
 		"name": "totalSupply",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
+		"outputs": [{"internalType": "uint256","name": "","type": "uint256"}],
+		"stateMutability": "view","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "to",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "value",
-				"type": "uint256"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "to","type": "address"},{"internalType": "uint256","name": "value","type": "uint256"}],
 		"name": "transfer",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [{"internalType": "bool","name": "","type": "bool"}],
+		"stateMutability": "nonpayable","type": "function"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "from",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "to",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "value",
-				"type": "uint256"
-			}
-		],
+		"inputs": [{"internalType": "address","name": "from","type": "address"},{"internalType": "address","name": "to","type": "address"},{"internalType": "uint256","name": "value","type": "uint256"}],
 		"name": "transferFrom",
-		"outputs": [
-			{
-				"internalType": "bool",
-				"name": "",
-				"type": "bool"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
+		"outputs": [{"internalType": "bool","name": "","type": "bool"}],
+		"stateMutability": "nonpayable","type": "function"
 	}
 ] as const satisfies Abi;
 
@@ -1213,7 +444,7 @@ let agentAccount: Account;
 try {
     publicClient = createPublicClient({
         chain: TARGET_CHAIN,
-        transport: http(), // Uses RPC URL defined in the chain object
+        transport: http(), 
     });
 
     agentAccount = privateKeyToAccount(AGENT_PRIVATE_KEY);
@@ -1236,14 +467,14 @@ try {
 
 
 // --- Database Setup ---
-// (Ensure SQLite is appropriate for your scale, consider PostgreSQL for production)
-const db = new sqlite3.Database('./bribes_viem_bera.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+// Stores processed bribe info and token decimals cache
+const db = new sqlite3.Database('./bribes_viem_mantle.db', sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
     if (err) {
         console.error("CRITICAL: Error opening database", err.message);
         process.exit(1);
     } else {
         console.log('Connected to the SQLite database.');
-        // Bribes table stores processed bribe info
+        // Bribes table
         db.run(`CREATE TABLE IF NOT EXISTS bribes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             project_id TEXT NOT NULL,
@@ -1259,7 +490,6 @@ const db = new sqlite3.Database('./bribes_viem_bera.db', sqlite3.OPEN_READWRITE 
          )`, (err) => {
              if (err) console.error("DB Error: creating token_decimals table", err.message);
          });
-         // Optional: Index for faster expiry lookup
          db.run(`CREATE INDEX IF NOT EXISTS idx_bribes_expiry ON bribes (expiry_timestamp)`, (err) => {
              if(err) console.error("DB Error: creating expiry index", err.message);
          });
@@ -1268,7 +498,6 @@ const db = new sqlite3.Database('./bribes_viem_bera.db', sqlite3.OPEN_READWRITE 
 
 // --- Helper Functions ---
 
-// Simple in-memory cache for decimals (cleared on restart)
 const tokenDecimalCache: Map<Address, number> = new Map();
 
 async function getTokenDecimals(tokenAddress: Address): Promise<number> {
@@ -1278,7 +507,6 @@ async function getTokenDecimals(tokenAddress: Address): Promise<number> {
     }
 
     try {
-        // Check DB first
         const row = await new Promise<{ decimals?: number } | undefined>((resolve, reject) => {
             db.get('SELECT decimals FROM token_decimals WHERE token_address = ?', [checksummedAddress], (err, row) => {
                 if (err) reject(new Error(`DB Error fetching decimals: ${err.message}`));
@@ -1293,11 +521,8 @@ async function getTokenDecimals(tokenAddress: Address): Promise<number> {
         }
     } catch (dbError) {
         console.error(`Database error checking decimals for ${checksummedAddress}:`, dbError);
-        // Proceed to fetch from chain
     }
 
-
-    // Fetch from contract
     console.log(`Workspaceing decimals for ${checksummedAddress} from chain...`);
     try {
         const decimals = await publicClient.readContract({
@@ -1307,7 +532,6 @@ async function getTokenDecimals(tokenAddress: Address): Promise<number> {
         });
         const decimalsNumber = Number(decimals);
 
-        // Store in DB and cache
         db.run('INSERT OR REPLACE INTO token_decimals (token_address, decimals) VALUES (?, ?)',
             [checksummedAddress, decimalsNumber],
              (err) => { if (err) console.error(`DB Error caching decimals for ${checksummedAddress}:`, err.message); }
@@ -1318,8 +542,8 @@ async function getTokenDecimals(tokenAddress: Address): Promise<number> {
     } catch (error) {
         console.error(`Error fetching decimals for ${checksummedAddress}:`, error);
         console.warn(`Could not fetch decimals for ${checksummedAddress}, DEFAULTING TO 18.`);
-        tokenDecimalCache.set(checksummedAddress, 18); // Cache default on failure
-        return 18; // Default to 18 if lookup fails
+        tokenDecimalCache.set(checksummedAddress, 18);
+        return 18; 
     }
 }
 
@@ -1327,28 +551,25 @@ function isAdmin(telegramId: number): boolean {
     return ADMIN_TELEGRAM_IDS.includes(String(telegramId));
 }
 
-// Simulate fetching APYs - HAVE TO REPLACE WITH ACTUAL DATA SOURCE INTEGRATION
+// --- Data Simulation (Mantle Context) ---
 async function getSimulatedAPYs(): Promise<Record<string, Record<string, number>>> {
-    // Format: { "protocolIdString": { "TOKEN_SYMBOL": APY_Percentage, ... }, ... }
-    // IMPORTANT: Use consistent token symbols/identifiers matched with your tokenRegistry
-    console.log("[Simulated Data] Fetching base APYs...");
+    // IMPORTANT: These IDs must match the `protocolId` you use in your smart contracts.
+    // Simulating popular Mantle Network protocols (Agni, FusionX, Init Capital)
+    console.log("[Simulated Data] Fetching base APYs for Mantle Protocols...");
     await new Promise(resolve => setTimeout(resolve, 50)); // Simulate network delay
     return {
-        // Ensure these IDs match what projects use when bribing
-        "BEX_HONEY_WBERA_LP": { "HONEY_WBERA_LP": 35.2 }, // Example BEX LP Pool
-        "Bend_HONEY_Market": { "HONEY": 8.1 },          // Example Lending Market
-        "Berps_BERA_Vault": { "BERA": 15.5 },            // Example Perp Vault
-        "Station_HONEY_Stake": {"HONEY": 12.0},
+        "Agni_WMNT_USDC_LP": { "WMNT": 25.5, "USDC": 25.5 }, // Example DEX LP
+        "FusionX_USDT_Pool": { "USDT": 12.0 },              // Example DEX Pool
+        "InitCapital_Lend_WMNT": { "WMNT": 5.2 },           // Example Lending Market
+        "MantleSwap_Stable_LP": { "USDC": 8.0, "USDT": 8.0}
     };
 }
 
-// Fetch active bribes from the DB
 async function getActiveBribes(): Promise<Record<string, number>> {
      const now = Math.floor(Date.now() / 1000);
      console.log(`[DB Query] Fetching active bribes expiring after ${now}...`);
      try {
          const rows = await new Promise<any[]>((resolve, reject) => {
-            // Select bribes that haven't expired yet
              db.all(`SELECT project_id, apy_boost FROM bribes WHERE expiry_timestamp > ?`,
                  [now],
                  (err, rows) => {
@@ -1369,22 +590,22 @@ async function getActiveBribes(): Promise<Record<string, number>> {
              }
          });
           console.log(`[DB Result] Found ${rows.length} active bribe entries.`);
-         return aggregatedBribes; // Format: { "protocolId": total_apy_boost, ... }
+         return aggregatedBribes; 
 
      } catch (error) {
           console.error("Failed to fetch active bribes from DB:", error);
-          return {}; // Return empty object on error
+          return {}; 
      }
 }
 
 // --- Telegram Bot Setup ---
-const bot = new Telegraf(BOT_TOKEN!); // Add '!' assuming validation passed
+const bot = new Telegraf(BOT_TOKEN!);
 
-bot.start((ctx) => ctx.reply('Welcome to the Berachain Yield Aggregator Bot! Use /help for commands.'));
+bot.start((ctx) => ctx.reply('Welcome to the Mantle Yield Aggregator Bot! Use /help for commands.'));
 
 bot.help((ctx) => ctx.reply(`
 Commands:
-/status - View current vault allocations.
+/status - View current vault allocations on Mantle Sepolia.
 /deposithelp - Instructions on how to deposit.
 /withdrawhelp - Instructions on how to withdraw.
 /bribehelp - Instructions for projects to submit bribes.
@@ -1398,25 +619,22 @@ Admin Only (Use With Caution!):
 // --- Telegram Command Handlers ---
 
 bot.command('status', async (ctx) => {
-    await ctx.reply('Fetching contract status from Berachain...');
+    await ctx.reply('Fetching contract status from Mantle Sepolia...');
     try {
-        let statusReport = '--- Aggregator Status ---\n\n';
+        let statusReport = '--- Aggregator Status (Mantle) ---\n\n';
         statusReport += '**Vault Allocations:**\n';
 
-        // !! IMPORTANT: Replace with dynamic fetching or robust config !!
-        const knownProtocols = ["BEX_HONEY_WBERA_LP", "Bend_HONEY_Market", "Berps_BERA_Vault", "Station_HONEY_Stake"];
-        // Replace with actual addresses on Berachain Artio for corresponding tokens/LPs
-        const knownYieldTokens: Record<string, Address> = {
-            "HONEY": "0xFCBD14DC51f0A4d49d5E53C2E0950e0bC26d0Dce",
-            "BERA": "0x6969696969696969696969696969696969696969", // Or use native BERA address if wrapped
-            "HONEY_WBERA_LP": "0x2c4a603a2aa5596287a06886862dc29d56dbc354" // Address of the BEX LP token
-        };
+        // Known protocols on Mantle Testnet (Simulated IDs)
+        const knownProtocols = ["Agni_WMNT_USDC_LP", "FusionX_USDT_Pool", "InitCapital_Lend_WMNT", "MantleSwap_Stable_LP"];
+        
+        // Use tokenRegistry for status checks
+        const knownYieldTokens = tokenRegistry;
 
         for (const protoId of knownProtocols) {
             statusReport += `  *${protoId}*:\n`;
             let hasAllocation = false;
             for (const [symbol, address] of Object.entries(knownYieldTokens)) {
-                if (!isAddress(address)) { // Basic check on placeholder
+                if (!isAddress(address)) {
                     statusReport += `    - ${symbol}: (Invalid Address Configured)\n`;
                     hasAllocation = true;
                     continue;
@@ -1435,14 +653,13 @@ bot.command('status', async (ctx) => {
                      }
                  } catch (readError: any) {
                      console.warn(`Could not read allocation for ${symbol} in ${protoId}: ${readError.shortMessage || readError.message}`);
-                     // Only show error if it's not a 'contract reverted' likely meaning protocol doesn't exist or support token
                      if (!readError.message?.includes('reverted')) {
                         statusReport += `    - ${symbol}: (Error Reading Allocation)\n`;
                         hasAllocation = true;
                      }
                  }
             }
-            if (!hasAllocation) statusReport += `    (No allocations found for known tokens)\n`;
+            if (!hasAllocation) statusReport += `    (No allocations found)\n`;
         }
 
         statusReport += '\n**Total Balances in Vault (Liquid + Allocated):**\n';
@@ -1465,7 +682,7 @@ bot.command('status', async (ctx) => {
             }
         }
 
-        await ctx.replyWithMarkdownV2(statusReport.replace(/([_*\[\]()~`>#+-=|{}.!])/g, '\\$1')); // Escape markdown
+        await ctx.replyWithMarkdownV2(statusReport.replace(/([_*\[\]()~`>#+-=|{}.!])/g, '\\$1')); 
 
     } catch (error: any) {
         console.error("Error processing /status:", error);
@@ -1473,30 +690,29 @@ bot.command('status', async (ctx) => {
     }
 });
 
-// Help commands remain the same, just ensure addresses are correct
 bot.command('deposithelp', (ctx) => {
     ctx.reply(`To deposit into the Yield Aggregator:
 1.  **Approve:** Use the token's contract to approve the Aggregator (${YIELD_AGGREGATOR_CONTRACT_ADDRESS}) to spend your tokens.
-2.  **Deposit:** Call 'deposit' on the Aggregator (${YIELD_AGGREGATOR_CONTRACT_ADDRESS}) with token address and amount (smallest unit).
+2.  **Deposit:** Call 'deposit' on the Aggregator (${YIELD_AGGREGATOR_CONTRACT_ADDRESS}) with token address and amount.
 
-Use Beratrail or other tools to interact.`);
+Use Mantle Explorer to interact.`);
 });
 
 bot.command('withdrawhelp', (ctx) => {
     ctx.reply(`To withdraw:
-1.  Call 'withdraw' on the Aggregator (${YIELD_AGGREGATOR_CONTRACT_ADDRESS}) with token address and amount (smallest unit).
+1.  Call 'withdraw' on the Aggregator (${YIELD_AGGREGATOR_CONTRACT_ADDRESS}) with token address and amount.
 
 Withdrawals depend on liquidity. Agent may need to rebalance first.`);
 });
 
 bot.command('bribehelp', (ctx) => {
-    ctx.reply(`Projects - To submit a bribe:
-1.  **Approve:** Use your bribe token's contract (e.g., USDC on Berachain) to approve the Bribe Collector (${BRIBE_COLLECTOR_CONTRACT_ADDRESS}) for the bribe amount.
+    ctx.reply(`Projects - To submit a bribe on Mantle:
+1.  **Approve:** Use your bribe token's contract (e.g., USDC) to approve the Bribe Collector (${BRIBE_COLLECTOR_CONTRACT_ADDRESS}).
 2.  **Submit:** Call 'submitBribe' on the Bribe Collector (${BRIBE_COLLECTOR_CONTRACT_ADDRESS}).
-    - \`_projectId\`: Your unique ID (e.g., "BEX_HONEY_WBERA_LP").
-    - \`_bribeToken\`: Address of the token (must be accepted).
-    - \`_bribeAmount\`: Amount in smallest unit (e.g., 100 USDC = 100000000 if 6 decimals).
-    - \`_durationSeconds\`: Duration in seconds (e.g., 7 days = 604800).
+    - \`_projectId\`: Your unique ID (e.g., "Agni_WMNT_USDC_LP").
+    - \`_bribeToken\`: Address of the token.
+    - \`_bribeAmount\`: Amount in smallest unit.
+    - \`_durationSeconds\`: Duration in seconds.
 
 The agent detects successful bribes automatically.`);
 });
@@ -1504,9 +720,8 @@ The agent detects successful bribes automatically.`);
 
 // --- Admin Commands (using viem) ---
 
-// Shared function to handle admin transactions
 async function sendAdminTx(
-    ctx: any, // Consider defining a Telegraf context type
+    ctx: any, 
     contractAddress: Address,
     abi: Abi,
     functionName: string,
@@ -1517,39 +732,35 @@ async function sendAdminTx(
         return;
     }
     try {
-        await ctx.reply(`Simulating ${functionName} transaction...`);
-        // Simulate the transaction
+        await ctx.reply(`Simulating ${functionName} transaction on Mantle...`);
         const { request } = await publicClient.simulateContract({
             address: contractAddress,
             abi: abi,
             functionName: functionName,
             args: args,
-            account: agentAccount, // Agent needs to be the owner
+            account: agentAccount, 
         });
 
         await ctx.reply(`Simulation successful. Sending transaction...`);
-        // Send the transaction
         const hash = await walletClient.writeContract(request);
 
         const explorerUrl = TARGET_CHAIN.blockExplorers?.default.url;
         const txUrl = explorerUrl ? `${explorerUrl}/tx/${hash}` : `Hash: ${hash}`;
         await ctx.reply(`Transaction sent: ${txUrl}\nWaiting for confirmation...`);
 
-        // Wait for confirmation
         const receipt: TransactionReceipt = await publicClient.waitForTransactionReceipt({ hash });
 
         if (receipt.status === 'success') {
             await ctx.reply(`✅ Transaction confirmed successfully!\nBlock: ${receipt.blockNumber}`);
-            console.log(`${functionName} tx ${hash} confirmed successfully.`);
+            console.log(`${functionName} tx ${hash} confirmed.`);
         } else {
             await ctx.reply(`❌ Transaction failed! Status: ${receipt.status}\nBlock: ${receipt.blockNumber}`);
-            console.error(`${functionName} tx ${hash} failed. Status: ${receipt.status}`);
+            console.error(`${functionName} tx ${hash} failed.`);
         }
-    } catch (error: unknown) { // Catch unknown for broader compatibility
+    } catch (error: unknown) { 
         console.error(`Error executing ${functionName}:`, error);
         let errorMessage = 'An unknown error occurred.';
         if (error instanceof Error) {
-             // Try to extract a useful message from viem errors
             if (error instanceof ContractFunctionExecutionError) {
                 errorMessage = `Contract execution failed: ${error.shortMessage}`;
             } else {
@@ -1569,7 +780,7 @@ bot.command('manage_yield_token', async (ctx) => {
     }
     const [, tokenAddressStr, acceptedStr] = parts;
     if (!isAddress(tokenAddressStr)) return ctx.reply('Invalid token address format.');
-    const tokenAddress = getAddress(tokenAddressStr); // Checksum
+    const tokenAddress = getAddress(tokenAddressStr); 
     const isAccepted = acceptedStr === 'true';
 
     await sendAdminTx(ctx, YIELD_AGGREGATOR_CONTRACT_ADDRESS!, yieldAggregatorABI, 'manageAcceptedToken', [tokenAddress, isAccepted]);
@@ -1602,12 +813,12 @@ bot.command('manage_bribe_token', async (ctx) => {
 
 // --- Event Listener for Bribes ---
 
-let unwatchBribeEvents: (() => void) | null = null; // Function to stop the listener
+let unwatchBribeEvents: (() => void) | null = null; 
 
 function startBribeListener() {
     if (unwatchBribeEvents) {
         console.log("Stopping existing bribe listener...");
-        unwatchBribeEvents(); // Stop previous listener if exists
+        unwatchBribeEvents(); 
     }
     console.log(`Starting listener for BribeReceived events on ${BRIBE_COLLECTOR_CONTRACT_ADDRESS}...`);
 
@@ -1616,12 +827,10 @@ function startBribeListener() {
             address: BRIBE_COLLECTOR_CONTRACT_ADDRESS!,
             abi: bribeCollectorABI,
             eventName: 'BribeReceived',
-            // strict: true, // Optional: only process logs strictly matching the ABI
             onLogs: async (logs: Log<bigint, number, false, undefined, true, typeof bribeCollectorABI, 'BribeReceived'>[]) => {
                 console.log(`Received ${logs.length} BribeReceived event(s)`);
                 for (const log of logs) {
                     try {
-                        // Args are typed based on the ABI now
                         const args = log.args;
                         if (!args || !args.projectId || !args.bribeToken || args.bribeAmount === undefined || args.durationSeconds === undefined || !log.blockNumber) {
                             console.warn("Skipping incomplete BribeReceived event log:", log);
@@ -1633,34 +842,28 @@ function startBribeListener() {
 
                         console.log(`Processing Bribe: Project=${projectId}, Token=${bribeToken}, Amount=${bribeAmount}, Duration=${durationSeconds}s, Block=${blockNumber}`);
 
-                        // 1. Get Block Timestamp
                         const block = await publicClient.getBlock({ blockNumber });
-                        const blockTimestamp = block.timestamp; // bigint (seconds)
-                        const expiryTimestamp = blockTimestamp + durationSeconds; // bigint
+                        const blockTimestamp = block.timestamp;
+                        const expiryTimestamp = blockTimestamp + durationSeconds; 
 
-                        // 2. Get Token Decimals
                         const decimals = await getTokenDecimals(bribeToken);
 
-                        // 3. Calculate APY Boost
                         const amountNumber = Number(bribeAmount) / (10 ** decimals);
-                        const durationDays = Number(durationSeconds) / 86400; // seconds in a day
+                        const durationDays = Number(durationSeconds) / 86400; 
                         const apyBoost = durationDays > 0
                             ? (amountNumber / durationDays) * BRIBE_APY_SCALE_FACTOR
                             : 0;
 
                         if (apyBoost <= 0) {
-                            console.warn(`Calculated zero or negative APY boost for bribe ${projectId} (Amount: ${amountNumber}, Duration Days: ${durationDays}). Skipping.`);
+                            console.warn(`Calculated zero or negative APY boost for bribe ${projectId}. Skipping.`);
                             continue;
                         }
 
                         console.log(`  Calculated APY Boost: ${apyBoost.toFixed(4)}%`);
                         console.log(`  Expiry Timestamp (Unix): ${expiryTimestamp}`);
-                        console.log(`  Expiry Date: ${new Date(Number(expiryTimestamp) * 1000).toISOString()}`);
 
-
-                        // 4. Store in DB
                         db.run(`INSERT INTO bribes (project_id, apy_boost, expiry_timestamp) VALUES (?, ?, ?)`,
-                            [projectId, apyBoost, Number(expiryTimestamp)], // Store expiry as number
+                            [projectId, apyBoost, Number(expiryTimestamp)], 
                             (err) => {
                                 if (err) {
                                     console.error(`DB Error storing bribe for ${projectId}:`, err);
@@ -1673,23 +876,21 @@ function startBribeListener() {
                     } catch (processingError) {
                         console.error("Error processing individual BribeReceived event:", processingError, "Log:", log);
                     }
-                } // end for loop over logs
+                } 
             },
             onError: (error) => {
                 console.error('ERROR in watchContractEvent for Bribes:', error);
-                // Basic resilience: try restarting the listener after a delay
                 if (unwatchBribeEvents) unwatchBribeEvents();
-                unwatchBribeEvents = null; // Allow restart
+                unwatchBribeEvents = null;
                 console.log("Attempting to restart bribe listener in 15 seconds...");
                 setTimeout(startBribeListener, 15000);
             },
-            poll: true, // Use polling - WS might be less reliable on some RPCs/networks
-            pollingInterval: 8_000, // Poll every 8 seconds (adjust as needed)
+            poll: true, 
+            pollingInterval: 8_000, 
         });
         console.log("Bribe listener setup complete.");
     } catch (listenerError) {
          console.error("CRITICAL: Failed to initialize bribe listener:", listenerError);
-         // Consider more robust retry or exit strategy
          console.log("Retrying listener setup in 30 seconds...");
          setTimeout(startBribeListener, 30000);
     }
@@ -1697,26 +898,18 @@ function startBribeListener() {
 
 // --- Core Agent Rebalance Logic ---
 
-// Important: Symbols MUST match those used in getSimulatedAPYs
-const tokenRegistry: Record<string, Address> = {
-    "HONEY": getAddress("0xFCBD14DC51f0A4d49d5E53C2E0950e0bC26d0Dce"), 
-    "BERA": getAddress("0x6969696969696969696969696969696969696969"), 
-    "HONEY_WBERA_LP": getAddress("0x2c4a603a2aa5596287a06886862dc29d56dbc354") 
-};
-
 async function runRebalanceCycle() {
-    console.log(`[${new Date().toISOString()}] --- Starting Rebalance Cycle ---`);
+    console.log(`[${new Date().toISOString()}] --- Starting Rebalance Cycle (Mantle) ---`);
     let rebalanceOccurred = false;
     try {
         const baseAPYs = await getSimulatedAPYs();
-        const activeBribes = await getActiveBribes(); // { "protocolId": boost, ... }
+        const activeBribes = await getActiveBribes(); 
 
         // 1. Calculate Effective APYs
         const effectiveAPYs: Record<string, Record<string, number>> = {};
         console.log("[Data] Base APYs:", JSON.stringify(baseAPYs));
         console.log("[Data] Active Bribes:", JSON.stringify(activeBribes));
 
-        // Iterate through all protocols that have base APYs OR active bribes
         const allProtocolIds = new Set([...Object.keys(baseAPYs), ...Object.keys(activeBribes)]);
 
         for (const protocolId of allProtocolIds) {
@@ -1724,16 +917,14 @@ async function runRebalanceCycle() {
             const protocolBaseAPYs = baseAPYs[protocolId] || {};
             const bribeBoost = activeBribes[protocolId] || 0;
 
-            // Iterate through all known yield tokens
              for (const tokenSymbol of Object.keys(tokenRegistry)) {
-                 const baseAPY = protocolBaseAPYs[tokenSymbol] ?? 0; // Default base to 0 if not present
-                 // Only calculate effective APY if base exists OR there's a bribe for this protocol
+                 const baseAPY = protocolBaseAPYs[tokenSymbol] ?? 0; 
                  if (baseAPY > 0 || bribeBoost > 0) {
                      const effective = baseAPY + bribeBoost;
                      effectiveAPYs[protocolId][tokenSymbol] = effective;
-                     if (bribeBoost > 0 && baseAPY > 0) { // Log only if both exist
+                     if (bribeBoost > 0 && baseAPY > 0) { 
                          console.log(`  Boost Applied: ${protocolId} for ${tokenSymbol}. Base: ${baseAPY.toFixed(4)}%, Boost: ${bribeBoost.toFixed(4)}%, Effective: ${effective.toFixed(4)}%`);
-                     } else if (bribeBoost > 0) { // Log if only bribe exists (implies base was 0 or missing)
+                     } else if (bribeBoost > 0) { 
                         console.log(`  Boost Only: ${protocolId} for ${tokenSymbol}. Boost: ${bribeBoost.toFixed(4)}%, Effective: ${effective.toFixed(4)}%`);
                      }
                  }
@@ -1741,11 +932,11 @@ async function runRebalanceCycle() {
         }
         console.log("[Calculation] Effective APYs:", JSON.stringify(effectiveAPYs));
 
-        // 2. Determine Optimal Allocation for each Managed Token
+        // 2. Determine Optimal Allocation
         for (const [tokenSymbol, tokenAddress] of Object.entries(tokenRegistry)) {
              console.log(`\n-- Optimizing for ${tokenSymbol} (${tokenAddress}) --`);
-            let bestAPY = -Infinity; // Start lower than 0
-            let bestProtocolId = "AGGREGATOR_VAULT"; // Default to keeping liquid
+            let bestAPY = -Infinity; 
+            let bestProtocolId = "AGGREGATOR_VAULT"; 
 
             for (const protocolId in effectiveAPYs) {
                 const currentTokenAPY = effectiveAPYs[protocolId]?.[tokenSymbol];
@@ -1755,14 +946,14 @@ async function runRebalanceCycle() {
                 }
             }
 
-             if (bestAPY <= 0) { // No yield >= 0 found
+             if (bestAPY <= 0) { 
                 console.log(`  No positive yield found for ${tokenSymbol}. Optimal: AGGREGATOR_VAULT (Liquid).`);
                 bestProtocolId = "AGGREGATOR_VAULT";
             } else {
                  console.log(`  Optimal Allocation: ${bestProtocolId} @ ${bestAPY.toFixed(4)}% APY`);
             }
 
-            // 3. Compare with Current On-Chain Allocation & Trigger Rebalance Tx
+            // 3. Compare with Current On-Chain Allocation
             let totalTokenBalance: bigint;
             let tokenDecimals: number;
             try {
@@ -1774,20 +965,19 @@ async function runRebalanceCycle() {
                  });
                  tokenDecimals = await getTokenDecimals(tokenAddress);
              } catch (e: any) {
-                 console.error(`  ERROR: Failed to read total balance/decimals for ${tokenSymbol}. Skipping optimization. Error: ${e.shortMessage || e.message}`);
-                 continue; // Skip token
+                 console.error(`  ERROR: Failed to read total balance/decimals for ${tokenSymbol}. Skipping. Error: ${e.shortMessage || e.message}`);
+                 continue; 
              }
 
             if (totalTokenBalance === BigInt(0)) {
-                console.log(`  No ${tokenSymbol} balance in vault. Skipping rebalance.`);
+                console.log(`  No ${tokenSymbol} balance in vault. Skipping.`);
                 continue;
             }
             console.log(`  Total Vault Balance: ${formatUnits(totalTokenBalance, tokenDecimals)} ${tokenSymbol}`);
 
-            // Find current allocation (Needs improvement for scale - maybe track off-chain)
             let currentProtocolId = "AGGREGATOR_VAULT";
             let currentAllocation = BigInt(0);
-             for (const protoId of allProtocolIds) { // Check all potential protocols
+             for (const protoId of allProtocolIds) { 
                  try {
                      const allocation = await publicClient.readContract({
                          address: YIELD_AGGREGATOR_CONTRACT_ADDRESS!,
@@ -1797,26 +987,22 @@ async function runRebalanceCycle() {
                      });
                      if (allocation > BigInt(0)) {
                          currentProtocolId = protoId;
-                         // Assume full allocation to one place for simplicity now
-                         // A real vault might split allocations. This logic needs enhancement for that.
-                         currentAllocation = totalTokenBalance;
+                         currentAllocation = totalTokenBalance; // Assuming simple allocation logic
                          break;
                      }
                  } catch (readError:any) {
-                     // Ignore errors here, just means it's not allocated there
+                     // Ignore errors here
                  }
              }
             if (currentProtocolId === "AGGREGATOR_VAULT") {
-                // If loop finished and it's still VAULT, means all funds are liquid
                 currentAllocation = totalTokenBalance;
             }
             console.log(`  Current Allocation: ${formatUnits(currentAllocation, tokenDecimals)} ${tokenSymbol} in ${currentProtocolId}`);
 
 
-            // 4. Execute Rebalance if Needed
+            // 4. Execute Rebalance
             if (bestProtocolId !== currentProtocolId) {
-                // Amount to move is the entire balance currently in the 'from' location
-                const amountToMove = currentAllocation; // If from VAULT, it's total balance; if from proto, it's that allocation.
+                const amountToMove = currentAllocation; 
 
                 if (amountToMove > BigInt(0)) {
                     console.log(`  >>> ACTION: Rebalancing ${formatUnits(amountToMove, tokenDecimals)} ${tokenSymbol} from ${currentProtocolId} TO ${bestProtocolId}...`);
@@ -1832,19 +1018,18 @@ async function runRebalanceCycle() {
                          const hash = await walletClient.writeContract(request);
                          const explorerUrl = TARGET_CHAIN.blockExplorers?.default.url;
                          const txUrl = explorerUrl ? `${explorerUrl}/tx/${hash}` : `Hash: ${hash}`;
-                         console.log(`    Tx Sent: ${txUrl}. Waiting for confirmation async...`);
+                         console.log(`    Tx Sent: ${txUrl}. Waiting for confirmation...`);
 
-                         // Async wait for confirmation - don't block the loop
                          publicClient.waitForTransactionReceipt({ hash, confirmations: 1 })
                              .then((receipt: TransactionReceipt) => {
                                  if (receipt.status === 'success') {
-                                     console.log(`    ✅ Rebalance CONFIRMED for ${tokenSymbol} (${hash}). Block: ${receipt.blockNumber}`);
+                                     console.log(`    ✅ Rebalance CONFIRMED for ${tokenSymbol} (${hash}).`);
                                  } else {
-                                     console.error(`    ❌ Rebalance FAILED for ${tokenSymbol} (${hash}). Status: ${receipt.status}. Block: ${receipt.blockNumber}`);
+                                     console.error(`    ❌ Rebalance FAILED for ${tokenSymbol} (${hash}).`);
                                  }
                              })
                              .catch(waitErr => {
-                                 console.error(`    ⚠️ Error waiting for rebalance tx ${hash} confirmation:`, waitErr);
+                                 console.error(`    ⚠️ Error waiting for rebalance tx ${hash}:`, waitErr);
                              });
 
                     } catch (txError: any) {
@@ -1852,12 +1037,12 @@ async function runRebalanceCycle() {
                         if (txError.cause) console.error("  -> Cause:", txError.cause);
                     }
                 } else {
-                     console.log(`  Skipping rebalance for ${tokenSymbol} - amount to move is zero (should not happen if totalBalance > 0).`);
+                     console.log(`  Skipping rebalance for ${tokenSymbol} - amount to move is zero.`);
                 }
             } else {
-                 console.log(`  No rebalance needed for ${tokenSymbol}. Already optimal in ${currentProtocolId}.`);
+                 console.log(`  No rebalance needed for ${tokenSymbol}. Already optimal.`);
             }
-        } // End token loop
+        } 
 
     } catch (error) {
         console.error("Error during rebalance cycle:", error);
@@ -1866,24 +1051,19 @@ async function runRebalanceCycle() {
     }
 }
 
-
-// --- Bot Launch and Agent Start ---
+// --- Bot Launch ---
 async function main() {
     try {
-        // Initial connection test
         const blockNumber = await publicClient.getBlockNumber();
         console.log(`Successfully connected to ${TARGET_CHAIN.name}. Current block: ${blockNumber}`);
 
-        // Start Telegram bot
         await bot.launch();
         console.log('Telegram bot started successfully.');
 
-        // Start listening for bribe events
         startBribeListener();
 
-        // Run the agent cycle immediately and then on interval
         console.log("Running initial rebalance cycle...");
-        await runRebalanceCycle(); // Run once immediately
+        await runRebalanceCycle(); 
         console.log(`Starting periodic rebalance cycle every ${REBALANCE_INTERVAL_MS / 1000 / 60} minutes.`);
         setInterval(runRebalanceCycle, REBALANCE_INTERVAL_MS);
 
@@ -1893,7 +1073,6 @@ async function main() {
     }
 }
 
-// Graceful shutdown handler
 const shutdown = (signal: string) => {
     console.log(`\n${signal} received. Shutting down...`);
     bot.stop(signal);
@@ -1910,17 +1089,15 @@ const shutdown = (signal: string) => {
             process.exit(0);
         }
     });
-    // Force exit after a timeout if DB close hangs
     setTimeout(() => {
         console.error("Forcing shutdown after timeout.");
         process.exit(1);
-    }, 5000); // 5 seconds grace period
+    }, 5000); 
 };
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-// Start the main application logic
 main().catch(error => {
     console.error("Unhandled error during agent startup:", error);
     process.exit(1);
